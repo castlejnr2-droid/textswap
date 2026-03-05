@@ -112,17 +112,47 @@ header{
 .sidebar::-webkit-scrollbar{width:4px;}
 .sidebar::-webkit-scrollbar-track{background:transparent;}
 .sidebar::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
+
+/* Mobile toggle button */
+.menu-toggle{display:none;background:var(--surface);border:1px solid var(--border);color:var(--accent);width:36px;height:36px;border-radius:6px;font-size:18px;cursor:pointer;align-items:center;justify-content:center;flex-shrink:0;}
+
+/* Mobile overlay */
+.sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:29;}
+
+@media(max-width:768px){
+  .hint{display:none;}
+  .menu-toggle{display:flex;}
+  .layout{flex-direction:column-reverse;}
+  .sidebar{
+    position:fixed;top:0;left:0;bottom:0;width:280px;z-index:30;
+    transform:translateX(-100%);transition:transform .25s ease;
+    border-right:1px solid var(--border);
+  }
+  .sidebar.open{transform:translateX(0);}
+  .sidebar-overlay.open{display:block;z-index:29;}
+  .canvas-area{flex:1;min-height:0;}
+  #mainCanvas,#selCanvas{touch-action:none;}
+  .btn{padding:12px 14px;font-size:13px;}
+  .field textarea,.field input[type=text],.field select{font-size:14px;padding:10px 12px;}
+  .dropzone{padding:14px 12px;}
+  .dropzone .ico{font-size:22px;}
+  .step{padding:8px 10px;}
+}
 </style>
 </head>
 <body>
 
 <header>
-  <div class="logo">Text<span>Swap</span></div>
+  <div style="display:flex;align-items:center;gap:10px;">
+    <button class="menu-toggle" id="menuBtn">☰</button>
+    <div class="logo">Text<span>Swap</span></div>
+  </div>
   <div class="hint">DRAW BOX → DETECT → REPLACE</div>
 </header>
 
 <div class="layout">
-  <div class="sidebar">
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+  <div class="sidebar" id="sidebar">
 
     <div class="sec">
       <h3>Image</h3>
@@ -650,6 +680,16 @@ function showStatus(m){$('statusMsg').textContent=m;$('status').classList.add('o
 function hideStatus(){$('status').classList.remove('on');}
 
 window.addEventListener('resize',()=>{if(origImg)setupCanvas();});
+
+// Mobile sidebar toggle
+const menuBtn=$('menuBtn'), sidebar=$('sidebar'), overlay=$('sidebarOverlay');
+function toggleSidebar(open){
+  sidebar.classList.toggle('open',open);
+  overlay.classList.toggle('open',open);
+}
+menuBtn.onclick=()=>toggleSidebar(!sidebar.classList.contains('open'));
+overlay.onclick=()=>toggleSidebar(false);
+
 setStep(1);
 </script>
 </body>
