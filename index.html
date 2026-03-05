@@ -447,14 +447,15 @@ async function analyzeRegion(){
           role:'user',
           content:[
             {type:'image',source:{type:'base64',media_type:'image/png',data:b64}},
-            {type:'text',text:`Analyze the text in this ${sel.w}x${sel.h}px image region. Return ONLY a JSON object — no markdown fences, no explanation:
+            {type:'text',text:`Analyze the text in this ${sel.w}x${sel.h}px image region. The region height is ${sel.h}px. Return ONLY a JSON object — no markdown fences, no explanation:
 {
-  "text": "<exact text visible>",
-  "fontSize": <height of a capital letter in pixels, integer>,
+  "text": "<exact text visible, include numbers and symbols exactly>",
+  "fontSize": <the CSS font-size in pixels that would reproduce this text at the same visual size within a ${sel.h}px tall box. For single-line text, this is typically 70-85% of the box height. Be precise — measure the actual glyph height including ascenders/descenders>,
   "fontWeight": <300|400|600|700|900>,
   "fontStyle": "<normal|italic>",
   "textAlign": "<left|center|right>",
-  "fontFamily": "<serif|sans-serif|monospace>"
+  "fontFamily": "<serif|sans-serif|monospace>",
+  "lineCount": <number of text lines visible>
 }`}
           ]
         }]
@@ -467,15 +468,22 @@ async function analyzeRegion(){
     let ai={};
     try{ai=JSON.parse(raw.replace(/```[a-z]*\n?|```/g,'').trim());}catch(e){console.warn('parse',raw);}
 
-    const fs=parseInt(ai.fontSize)||Math.max(10,Math.round(sel.h*0.65));
+    const lineCount=parseInt(ai.lineCount)||1;
+    let fs=parseInt(ai.fontSize)||Math.max(10,Math.round(sel.h*0.78/lineCount));
     const fw=parseInt(ai.fontWeight)||estimateWeight(rctx,sel.w,sel.h,textColor);
+    const ff=ai.fontFamily||'sans-serif';
+
+    // Calibrate: render detected text at detected size and adjust if it doesn't fill the box
+    if(ai.text && fs>0){
+      fs=calibrateFontSize(ai.text,fs,fw,ai.fontStyle||'normal',ff,sel.w,sel.h,lineCount);
+    }
 
     detected={
       text:ai.text||'',
       fontSize:fs,
       fontWeight:fw,
       fontStyle:ai.fontStyle||'normal',
-      fontFamily:ai.fontFamily||'sans-serif',
+      fontFamily:ff,
       textAlign:ai.textAlign||'left',
       textColor,bgColor
     };
@@ -484,7 +492,7 @@ async function analyzeRegion(){
     hideStatus();
   } catch(err){
     console.error('AI error',err);
-    const fs=Math.max(10,Math.round(sel.h*0.65));
+    const fs=Math.max(10,Math.round(sel.h*0.78));
     const fw=estimateWeight(rctx,sel.w,sel.h,textColor);
     detected={text:'',fontSize:fs,fontWeight:fw,fontStyle:'normal',fontFamily:'sans-serif',textAlign:'left',textColor,bgColor};
     updateDetectedUI();
@@ -539,6 +547,26 @@ function estimateWeight(ctx,w,h,tc){
 function toHex(r,g,b){return'#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');}
 function fromHex(h){h=h.replace('#','');if(h.length===3)h=h.split('').map(c=>c+c).join('');const n=parseInt(h,16);return{r:(n>>16)&255,g:(n>>8)&255,b:n&255};}
 function cdist(a,b){return Math.sqrt((a.r-b.r)**2+(a.g-b.g)**2+(a.b-b.b)**2);}
+
+// --- Font size calibration ---
+function calibrateFontSize(text,initialFs,fw,fst,ff,boxW,boxH,lineCount){
+  const tc=document.createElement('canvas');
+  const tx=tc.getContext('2d');
+  let fs=initialFs;
+  // Binary search for the font size that makes the text fill the box height
+  let lo=Math.max(6,Math.round(fs*0.5)), hi=Math.round(fs*2.0);
+  for(let i=0;i<15;i++){
+    const mid=Math.round((lo+hi)/2);
+    const fontStr=`${fst==='italic'?'italic ':''}${fw} ${mid}px ${ff}`.trim();
+    tx.font=fontStr;
+    const lines=wrapText(tx,text,boxW-4);
+    const totalH=lines.length*mid*1.22;
+    if(totalH<boxH*0.85) lo=mid+1;
+    else if(totalH>boxH*1.05) hi=mid-1;
+    else {lo=mid;break;}
+  }
+  return Math.max(6,lo);
+}
 
 // --- Apply Text ---
 $('applyBtn').onclick=applyText;
