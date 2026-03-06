@@ -119,6 +119,19 @@ header{
 /* Mobile overlay */
 .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:29;}
 
+/* Magnifier loupe */
+.loupe{position:fixed;width:120px;height:120px;border-radius:50%;border:3px solid var(--accent);box-shadow:0 4px 20px rgba(0,0,0,.8);overflow:hidden;pointer-events:none;z-index:50;display:none;}
+.loupe canvas{display:block;}
+
+/* Mobile zoom controls */
+.zoom-controls{display:none;position:absolute;bottom:12px;right:12px;z-index:10;gap:6px;}
+.zoom-btn{width:40px;height:40px;border-radius:8px;background:var(--surface);border:1px solid var(--border);color:var(--accent);font-size:20px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+.zoom-btn:active{background:var(--accent);color:#000;}
+.zoom-level{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:0 10px;font-size:11px;font-family:'Syne Mono',monospace;color:var(--muted);display:flex;align-items:center;}
+
+/* Mobile touch hint */
+.touch-hint{display:none;position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:10;background:var(--surface);border:1px solid var(--border);border-radius:100px;padding:6px 14px;font-size:10px;color:var(--muted);font-family:'Syne Mono',monospace;white-space:nowrap;}
+
 @media(max-width:768px){
   .hint{display:none;}
   .menu-toggle{display:flex;}
@@ -130,13 +143,15 @@ header{
   }
   .sidebar.open{transform:translateX(0);}
   .sidebar-overlay.open{display:block;z-index:29;}
-  .canvas-area{flex:1;min-height:0;}
+  .canvas-area{flex:1;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;}
   #mainCanvas,#selCanvas{touch-action:none;}
   .btn{padding:12px 14px;font-size:13px;}
   .field textarea,.field input[type=text],.field select{font-size:14px;padding:10px 12px;}
   .dropzone{padding:14px 12px;}
   .dropzone .ico{font-size:22px;}
   .step{padding:8px 10px;}
+  .zoom-controls{display:flex;}
+  .touch-hint{display:block;}
 }
 </style>
 </head>
@@ -282,11 +297,18 @@ header{
       <h2>Upload an Image</h2>
       <p>Drop any image into the panel on the left to start replacing text.</p>
     </div>
+    <div class="touch-hint" id="touchHint">Zoom in → then draw a box</div>
+    <div class="zoom-controls" id="zoomControls">
+      <button class="zoom-btn" id="zoomOut">−</button>
+      <div class="zoom-level" id="zoomLevel">1×</div>
+      <button class="zoom-btn" id="zoomIn">+</button>
+    </div>
     <div class="cw hidden" id="cw">
       <canvas id="mainCanvas"></canvas>
       <canvas id="selCanvas"></canvas>
     </div>
   </div>
+  <div class="loupe" id="loupe"><canvas id="loupeCanvas" width="120" height="120"></canvas></div>
 </div>
 
 <div id="status"><div class="spin"></div><span id="statusMsg">Analyzing…</span></div>
@@ -296,7 +318,7 @@ const $=id=>document.getElementById(id);
 
 let origImg=null, workC=document.createElement('canvas'), workX=workC.getContext('2d');
 let history=[], sel=null, drawing=false, startX=0, startY=0, scale=1;
-let detected=null, editMode='auto', selFW=400;
+let detected=null, editMode='auto', selFW=400, mobileZoom=1;
 
 const mc=$('mainCanvas'), mx=mc.getContext('2d');
 const sc=$('selCanvas'), scx=sc.getContext('2d');
@@ -397,9 +419,84 @@ sc.addEventListener('mouseup', e=>{
   analyzeRegion();
 });
 
-sc.addEventListener('touchstart',e=>{e.preventDefault();sc.dispatchEvent(new MouseEvent('mousedown',{clientX:e.touches[0].clientX,clientY:e.touches[0].clientY}));},{passive:false});
-sc.addEventListener('touchmove',e=>{e.preventDefault();sc.dispatchEvent(new MouseEvent('mousemove',{clientX:e.touches[0].clientX,clientY:e.touches[0].clientY}));},{passive:false});
-sc.addEventListener('touchend',e=>{e.preventDefault();const t=e.changedTouches[0];sc.dispatchEvent(new MouseEvent('mouseup',{clientX:t.clientX,clientY:t.clientY}));},{passive:false});
+// --- Touch handling with loupe ---
+const isMobile=('ontouchstart' in window)||(navigator.maxTouchPoints>0);
+const loupe=$('loupe'), loupeC=$('loupeCanvas'), lx=loupeC.getContext('2d');
+const LOUPE_SIZE=120, LOUPE_ZOOM=2.5, TOUCH_OFFSET=-60;
+
+sc.addEventListener('touchstart',e=>{
+  if(!origImg||e.touches.length!==1)return;
+  e.preventDefault();
+  const t=e.touches[0];
+  drawing=true;
+  const r=sc.getBoundingClientRect();
+  startX=t.clientX-r.left;
+  startY=t.clientY-r.top;
+  sel=null;
+  clearSel();
+  if(isMobile) showLoupe(t.clientX,t.clientY,startX,startY);
+},{passive:false});
+
+sc.addEventListener('touchmove',e=>{
+  if(!drawing||e.touches.length!==1)return;
+  e.preventDefault();
+  const t=e.touches[0];
+  const r=sc.getBoundingClientRect();
+  const cx=t.clientX-r.left, cy=t.clientY-r.top;
+  drawBox(startX,startY,cx-startX,cy-startY,false);
+  if(isMobile) showLoupe(t.clientX,t.clientY,cx,cy);
+},{passive:false});
+
+sc.addEventListener('touchend',e=>{
+  if(!drawing)return;
+  e.preventDefault();
+  drawing=false;
+  hideLoupe();
+  const t=e.changedTouches[0];
+  const r=sc.getBoundingClientRect();
+  const cx=t.clientX-r.left, cy=t.clientY-r.top;
+  const w=cx-startX, h=cy-startY;
+  if(Math.abs(w)<6||Math.abs(h)<6){clearSel();return;}
+  sel={
+    x:Math.max(0,Math.round(Math.min(startX,cx)/scale/mobileZoom)),
+    y:Math.max(0,Math.round(Math.min(startY,cy)/scale/mobileZoom)),
+    w:Math.round(Math.abs(w)/scale/mobileZoom),
+    h:Math.round(Math.abs(h)/scale/mobileZoom)
+  };
+  sel.w=Math.min(workC.width-sel.x,sel.w);
+  sel.h=Math.min(workC.height-sel.y,sel.h);
+  drawBox(Math.min(startX,cx),Math.min(startY,cy),Math.abs(w),Math.abs(h),true);
+  setStep(3);
+  analyzeRegion();
+},{passive:false});
+
+function showLoupe(screenX,screenY,canvasX,canvasY){
+  loupe.style.display='block';
+  // Position loupe above the finger
+  loupe.style.left=(screenX-LOUPE_SIZE/2)+'px';
+  loupe.style.top=(screenY-LOUPE_SIZE-40)+'px';
+  // Draw zoomed view
+  lx.clearRect(0,0,LOUPE_SIZE,LOUPE_SIZE);
+  lx.save();
+  lx.beginPath();
+  lx.arc(LOUPE_SIZE/2,LOUPE_SIZE/2,LOUPE_SIZE/2,0,Math.PI*2);
+  lx.clip();
+  lx.fillStyle='#111';
+  lx.fillRect(0,0,LOUPE_SIZE,LOUPE_SIZE);
+  const srcX=canvasX-LOUPE_SIZE/(2*LOUPE_ZOOM);
+  const srcY=canvasY-LOUPE_SIZE/(2*LOUPE_ZOOM);
+  const srcW=LOUPE_SIZE/LOUPE_ZOOM;
+  lx.drawImage(mc,srcX,srcY,srcW,srcW,0,0,LOUPE_SIZE,LOUPE_SIZE);
+  // Crosshair
+  lx.strokeStyle='rgba(232,255,71,0.6)';
+  lx.lineWidth=1;
+  lx.beginPath();
+  lx.moveTo(LOUPE_SIZE/2,0);lx.lineTo(LOUPE_SIZE/2,LOUPE_SIZE);
+  lx.moveTo(0,LOUPE_SIZE/2);lx.lineTo(LOUPE_SIZE,LOUPE_SIZE/2);
+  lx.stroke();
+  lx.restore();
+}
+function hideLoupe(){loupe.style.display='none';}
 
 function clearSel(){scx.clearRect(0,0,sc.width,sc.height);}
 
@@ -708,6 +805,21 @@ function showStatus(m){$('statusMsg').textContent=m;$('status').classList.add('o
 function hideStatus(){$('status').classList.remove('on');}
 
 window.addEventListener('resize',()=>{if(origImg)setupCanvas();});
+
+// --- Mobile zoom ---
+let mobileZoom=1;
+$('zoomIn').onclick=()=>{mobileZoom=Math.min(5,mobileZoom+0.5);applyMobileZoom();};
+$('zoomOut').onclick=()=>{mobileZoom=Math.max(0.5,mobileZoom-0.5);applyMobileZoom();};
+function applyMobileZoom(){
+  $('zoomLevel').textContent=mobileZoom+'×';
+  if(origImg){
+    const cw=$('cw');
+    cw.style.transform=`scale(${mobileZoom})`;
+    cw.style.transformOrigin='top left';
+  }
+  if(mobileZoom>1) $('touchHint').textContent='Scroll to pan → draw a box';
+  else $('touchHint').textContent='Zoom in → then draw a box';
+}
 
 // Mobile sidebar toggle
 const menuBtn=$('menuBtn'), sidebar=$('sidebar'), overlay=$('sidebarOverlay');
