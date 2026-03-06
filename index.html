@@ -807,7 +807,6 @@ function hideStatus(){$('status').classList.remove('on');}
 window.addEventListener('resize',()=>{if(origImg)setupCanvas();});
 
 // --- Mobile zoom ---
-let mobileZoom=1;
 $('zoomIn').onclick=()=>{mobileZoom=Math.min(5,mobileZoom+0.5);applyMobileZoom();};
 $('zoomOut').onclick=()=>{mobileZoom=Math.max(0.5,mobileZoom-0.5);applyMobileZoom();};
 function applyMobileZoom(){
